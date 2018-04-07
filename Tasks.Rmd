@@ -1,0 +1,359 @@
+---
+title: "Data Capstone Project"
+author: "Kevin Jiang"
+date: "2018/3/4"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(stringi)
+library(tm)
+library(dplyr)
+library(downloader)
+library(RWeka)
+library(ggplot2)
+library(gridExtra)
+library(wordcloud)
+library(SnowballC)
+```
+
+##1 - Understanding the problem
+
+Tasks to accomplish
+
+1. Obtaining the data - Can you download the data and load/manipulate it in R?
+2. Familiarizing yourself with NLP and text mining - Learn about the basics of natural language processing and how it relates to the data science process you have learned in the Data Science Specialization.
+
+```{r task0, cache=TRUE,results='asis'}
+
+setwd("~/Dropbox/Data Science/Data Capstone")
+if(!file.exists("dataset.zip")){
+    url <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+    download(url, dest="dataset.zip", mode="wb") 
+    unzip ("dataset.zip", exdir = "./")
+    list.files("./final/en_US")
+}
+
+```
+
+##2 - Getting and Cleaning the data
+
+Tasks to accomplish
+
+1. Tokenization - identifying appropriate tokens such as words, punctuation, and numbers. Writing a function that takes a file as input and returns a tokenized version of it.
+2. Profanity filtering - removing profanity and other words you do not want to predict.
+
+###Summary of the text file
+```{r task1,warning=FALSE,cache=TRUE}
+conTwitter <- file("./final/en_US/en_US.twitter.txt", "r")
+conBlog <- file("./final/en_US/en_US.blogs.txt", "r")
+conNews <- file("./final/en_US/en_US.news.txt", "r")
+
+twitter <- readLines(conTwitter, encoding="UTF-8")
+blogs <- readLines(conBlog, encoding="UTF-8")
+news <- readLines(conNews, encoding="UTF-8")
+checkTextFile <- function(text) {
+    # size of data
+    size <- format(object.size(text), units = "Mb")
+    # count lines
+    lines_count <- length(text)
+    # count words
+    words_count <- sum(stri_count_words(text))
+    return(list(size, lines_count, words_count))
+}
+summary_blogs <- checkTextFile(blogs)
+summary_news <- checkTextFile(news)
+summary_twitter <- checkTextFile(twitter)
+filename <- c("Blog Data","News Data","twitter Data")
+summary <- rbind(unlist(summary_blogs),unlist(summary_news),unlist(summary_twitter))
+summary_table <- data.frame(cbind(filename,summary))
+names(summary_table) <- c("File","Size", "Number of Lines", "Number of Words")
+summary_table
+rm(summary,summary_table,summary_blogs,summary_news,summary_twitter)
+```
+###Cleaning and sampling data
+1. Covert to ASCII encoding
+2. We sample 10000 of the each file and combine data for explorary analysis
+```{r sample,warning=FALSE,cache=TRUE}
+# convert to "ASCII" encoding to get rid of weird characters
+blogs <- iconv(blogs, to="ASCII", sub="")
+news <- iconv(news, to="ASCII", sub="")
+twitter <- iconv(twitter, to="ASCII", sub="")
+
+set.seed(2) # For reproducibility
+sampleSize <- 1000
+blogs_sample <- blogs[sample(1:length(blogs),sampleSize)]
+twitter_sample <- twitter[sample(1:length(twitter),sampleSize)]
+news_sample <- news[sample(1:length(news),sampleSize)]
+sample_us_text <- c(blogs_sample,twitter_sample,news_sample)
+```
+
+###Profanity filtering
+Profanity words needs to be removed from the data and the list of those words are available here: http://www.bannedwordlist.com/lists/swearWords.txt and http://www.cs.cmu.edu/~biglou/resources/bad-words.txt
+
+```{r Profanity,warning=FALSE,cache=TRUE}
+if(!file.exists("badwords.txt")) {
+    fileUrl2 <- "http://www.bannedwordlist.com/lists/swearWords.txt"
+    download.file(fileUrl2, destfile="badwords.txt")
+}
+badwords <- readLines("badwords.txt")
+profanity <- VectorSource(badwords)
+```
+
+###Tokenization
+Perform below transformation by using TM package. 
+
+* convert to lower case
+* Punctuations are removed
+* Numbers and spaces are removed
+* Remove links
+* symbols
+* Remove proantiy 
+* Make sure all data is plain text
+
+
+```{r token,warning=FALSE,cache=TRUE}
+remove_online_junk <- function(x){
+    # replace emails and such but space
+    x <- gsub("[^ ]{1,}@[^ ]{1,}"," ",x)
+    x <- gsub(" @[^ ]{1,}"," ",x)
+    # hashtags
+    x <- gsub("#[^ ]{1,}"," ",x) 
+    # websites and file systems
+    x <- gsub("[^ ]{1,}://[^ ]{1,}"," ",x) 
+    x
+}
+
+remove_symbols <- function(x){
+    # Edit out most non-alphabetical character
+    # text must be lower case first
+    x <- gsub("[`??????]","'",x)
+    x <- gsub("[^a-z']"," ",x)
+    x <- gsub("'{2,}"," '",x)
+    x <- gsub("' "," ",x)
+    x <- gsub(" '"," ",x)
+    x <- gsub("^'","",x)
+    x <- gsub("'$","",x)
+    x
+}
+
+tokenization <- function (x){
+    corpus <- Corpus(VectorSource(x))# make a corpus object
+    corpus <- tm_map(corpus, tolower) # make everything lowercase
+    #corpus <- tm_map(corpus, removeWords,stopwords("english"))
+    corpus <- tm_map(corpus, removePunctuation) # remove punctuation
+    corpus <- tm_map(corpus, removeNumbers) # remove numbers
+    corpus <- tm_map(corpus, stripWhitespace) # get rid of extra spaces
+    corpus <- tm_map(corpus, content_transformer(remove_online_junk))
+    corpus <- tm_map(corpus, content_transformer(remove_symbols))
+    corpus <- tm_map(corpus, PlainTextDocument) #That should make sure all data is in PlainTextDocument
+    corpus <- tm_map(corpus, removeWords, profanity) #remove bad words
+}
+
+sample_token <- tokenization(sample_us_text)
+rm(sample_us_text,blogs_sample,twitter_sample,news_sample,twitter,blogs,news,words_blogs,words_news,words_twitter,profanity,readfile)
+```
+
+
+##3 - Exploratory Data Analysis
+
+Tasks to accomplish
+
+1. Exploratory analysis - perform a thorough exploratory analysis of the data, understanding the distribution of words and relationship between the words in the corpora.
+2. Understand frequencies of words and word pairs - build figures and tables to understand variation in the frequencies of words and word pairs in the data.
+
+Questions to consider
+
+1. Some words are more frequent than others - what are the distributions of word frequencies?
+2. What are the frequencies of 2-grams and 3-grams in the dataset?
+3. How many unique words do you need in a frequency sorted dictionary to cover 50% of all word instances in the language? 90%?
+4. How do you evaluate how many of the words come from foreign languages?
+5. Can you think of a way to increase the coverage ??? identifying words that may not be in the corpora or using a smaller number of words in the dictionary to cover the same number of phrases?
+
+###N-Gram Generation
+```{r n-gram,warning=FALSE,cache=TRUE}
+sampleCorpus <- VCorpus(VectorSource(sample_token))
+sampleDataFrame <- data.frame(text=unlist(sapply(sampleCorpus, '[',"content")),stringsAsFactors=F)
+uniGramToken <- NGramTokenizer(sampleDataFrame, Weka_control(min=1, max=1))
+biGramToken <- NGramTokenizer(sampleDataFrame, Weka_control(min=2, max=2))
+triGramToken <- NGramTokenizer(sampleDataFrame, Weka_control(min=3, max=3))
+quadGramToken <- NGramTokenizer(sampleDataFrame, Weka_control(min=4,max=4))
+
+uniGrams <- data.frame(table(uniGramToken))
+biGrams <- data.frame(table(biGramToken))
+triGrams <- data.frame(table(triGramToken))
+quadGrams <- data.frame(table(quadGramToken))
+
+uniGrams <- uniGrams[order(uniGrams$Freq,decreasing=TRUE),]
+colnames(uniGrams) <- c("Word", "Frequency")
+biGrams <- biGrams[order(biGrams$Freq,decreasing=TRUE),]
+colnames(biGrams) <- c("Word", "Frequency")
+triGrams <- triGrams[order(triGrams$Freq,decreasing=TRUE),]
+colnames(triGrams) <- c("Word", "Frequency")
+quadGrams <- quadGrams[order(quadGrams$Freq,decreasing=TRUE),]
+colnames(quadGrams) <- c("Word", "Frequency")
+
+```
+
+###Visualize N-Gram
+####Frequency plot
+```{r plot,warning=FALSE,cache=TRUE}
+
+uniGrams_s <- uniGrams[1:15,]
+biGrams_s <- biGrams[1:15,]
+triGrams_s <- triGrams[1:15,]
+quadGrams_s <- quadGrams[1:15,]
+p1 = ggplot(uniGrams_s, aes(x=reorder(Word,Frequency),y=Frequency))+geom_bar(stat="identity", fill="red")+ geom_text(aes(y=Frequency+200,label=Frequency),vjust=1)+coord_flip()+labs(x = "Word", y = "Frequency", title = "uniGrams Frequency")
+p2 = ggplot(biGrams_s, aes(x=reorder(Word,Frequency),y=Frequency))+geom_bar(stat="identity", fill="red")+ geom_text(aes(y=Frequency+200,label=Frequency),vjust=1)+coord_flip()+labs(x = "Word", y = "Frequency", title = "biGrams Frequency")
+p3 = ggplot(triGrams_s, aes(x=reorder(Word,Frequency),y=Frequency))+geom_bar(stat="identity", fill="red")+ geom_text(aes(y=Frequency,label=Frequency),vjust=1)+coord_flip()+labs(x = "Word", y = "Frequency", title = "triGrams Frequency")
+p4 = ggplot(quadGrams_s, aes(x=reorder(Word,Frequency),y=Frequency))+geom_bar(stat="identity", fill="red")+ geom_text(aes(y=Frequency,label=Frequency),vjust=1)+coord_flip()+labs(x = "Word", y = "Frequency", title = "quadGrams Frequency")
+grid.arrange(p1, p2, p3, p4)
+rm(uniGrams_s,biGrams_s,triGrams_s,quadGrams_s)
+```
+
+####Word Cloud
+```{r cloud, warning=FALSE,cache=TRUE}
+
+par(mfrow = c(2, 2))
+wordcloud(words = uniGrams$Word, freq = uniGrams$Frequency,
+          max.words=200, random.order=FALSE, colors = brewer.pal(4, "Set1"), main = "uniGrams")
+wordcloud(words = biGrams$Word, freq = biGrams$Frequency,
+          max.words=200, random.order=FALSE, colors = brewer.pal(4, "Set1"), main = "biGrams")
+wordcloud(words = triGrams$Word, freq = triGrams$Frequency,
+          max.words=200, random.order=FALSE, colors = brewer.pal(4, "Set1"), main = "triGrams")
+wordcloud(words = quadGrams$Word, freq = quadGrams$Frequency,
+          max.words=200, random.order=FALSE, colors = brewer.pal(4, "Set1"), main = "quadGrams")
+```
+
+
+##5 Model Design
+1. Exam the frequency count of all the N-Grams
+2. Build a dictionary that covers majarity (90%?) of the words 
+3. Use back off model for word prediction 
+4. Build shinny app with documentation 
+
+### Word Coverage
+We would need to know how many unique words do you need in a dictionary to cover x% of all work instances
+
+```{r coverage, warning=FALSE,cache=TRUE}
+getCoverage <- function(nGram,percentage){
+    total <- sum(nGram$Frequency)
+    i <- 1
+    sum <- 0
+    coverage <- 0
+    while (i < nrow(nGram) && coverage < percentage) 
+    {
+        sum <- sum + nGram[i, 2]
+        coverage <- (sum / total)*100
+        i <- i + 1
+    }
+    i
+}
+sum(uniGrams$Frequency)
+getCoverage(uniGrams,90)
+getCoverage(uniGrams,95)
+```
+We will use this function to build the dictionary for NGRAMs that cover 95% for the unique words
+
+##6 Prediction algorithem
+After checking that the user inputs a valid phrase (i.e. 2 words or more, text only) and cleaning up their input (i.e. alphabet characters only, lowercase, punctuation) we plan to use this algorithm:
+
+* If the input phrase is 2 words, choose the most frequent phrase from among 3-word phrases that start with the input phrase. The predicted word is the last word of the chosen 3-word phrase.
+* If the input phrase is 3 words, choose the most frequent phrase from among 4-word phrases that start with the input phrase. The predicted word is the last word of the chosen 4-word phrase.
+* If the input phrase is longer than 3 words, use only the last 3 input words and follow the procedure for a 3-word phrase.
+* If there is no prediction for a 3-word input phrase, use only the last 2 input words and follow the procedure for a 2-word phrase.
+* If there is no prediction for a 2-word input phrase, select the most frequent word in the text sample.
+
+##7 Test Model
+```{r function, ref.label = "functions", warning=FALSE,cache=TRUE,echo= FALSE}
+```
+```{r model, warning=FALSE,cache=TRUE}
+
+#build dictionary
+DictionaryQuad <- buildDictionary(quadGrams,4,95)
+DictionaryTri <- buildDictionary(triGrams,3,95)
+DictionaryBi <- buildDictionary(biGrams,2,95)
+default <- head(uniGrams,1)
+predict("what was the",DictionaryQuad,DictionaryTri,DictionaryBi,default)
+predict("do you",DictionaryQuad,DictionaryTri,DictionaryBi,default)
+predict("i",DictionaryQuad,DictionaryTri,DictionaryBi,default)
+```
+
+##8 Futher enhancement
+* TM in Rweka package has performance issue when the sample size is getting large. Takes hours even with 10% sample size. 
+* Use quanteda package which has a better performance to build n-Gram in Shinny Application 
+
+###Functions for predition algorithem
+```{r functions, warning=FALSE,cache=TRUE}
+
+buildDictionary <- function(nGrams,n,coveragePercent){
+    totalWord = sum(nGrams$Frequency)
+    coverageWord = getCoverage(nGrams,coveragePercent)
+    nGrams <- nGrams[1:coverageWord,]
+    nGrams$Word <- as.character(nGrams$Word)
+    #split n-grams into n-1 grams and last word
+    nGrams[,"prediction"] <- NA
+    tmp = strsplit(nGrams$Word," ")
+    index = sapply(tmp,function(x){paste(x[1:n-1],collapse = " ")})
+    prediction = sapply(tmp,function(x){x[n]})
+    dictionary = data.frame(index,prediction,Frequency=nGrams$Frequency)
+    dictionary <- filter(dictionary,Frequency > 2)
+    dictionary
+}
+checkDictionary <- function(input,dictionary){
+    if(input %in% dictionary$index){
+        result = dictionary[which(input == dictionary$index),c(2:3)]
+        if(nrow(result)>5){
+            result = head(result,5)
+        }else{
+            result
+        }
+    }else{
+        result =NA
+    }
+}
+predict <- function(input,DictionaryQuad,DictionaryTri,DictionaryBi,default){
+    if(stri_count_words(input)>=3){
+        input = paste(tail(unlist(strsplit(input,' ')),3), collapse=" ")
+        result = checkDictionary(input,DictionaryQuad)
+        if(is.na(result)){
+            input = paste(tail(unlist(strsplit(input,' ')),2), collapse=" ")
+            result = checkDictionary(input,DictionaryTri)
+            if(is.na(result)){
+                input = paste(tail(unlist(strsplit(input,' ')),1), collapse=" ")
+                result = checkDictionary(input,DictionaryBi)
+                if(is.na(result)){
+                    default
+                }else{
+                    result
+                }
+            }else{
+                result
+            }
+        }else{
+            result
+        }
+    }else if(stri_count_words(input)==2){
+        result = checkDictionary(input,DictionaryTri)
+        if(is.na(result)){
+            input = paste(tail(unlist(strsplit(input,' ')),1), collapse=" ")
+            result = checkDictionary(input,DictionaryBi)
+            if(is.na(result)){
+                default
+            }else{
+                result
+            }
+        }else{
+            result
+        }
+    }else{
+        result = checkDictionary(input,DictionaryBi)
+        if(is.na(result)){
+            default
+        }else{
+            result
+        }
+    }
+}
+```
